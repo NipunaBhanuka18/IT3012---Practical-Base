@@ -1,5 +1,6 @@
 # agent.py
 import random
+import math
 from collections import deque
 import heapq
 
@@ -57,6 +58,12 @@ class SearchAgent:
     def __init__(self, active_algo: str = 'BFS'):
         self.plan = []  # List of actions to execute
         self.active_algo = active_algo  # 'BFS', 'DFS', or 'UCS'
+
+    def manhattan_distance(self, pos, goal):
+        return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+
+    def euclidean_distance(self, pos, goal):
+        return math.sqrt((pos[0] - goal[0])**2 + (pos[1] - goal[1])**2)
 
     def _get_neighbors(self, state: tuple, grid_size: tuple, walls: set):
         """Generates valid next states and the corresponding action."""
@@ -145,6 +152,40 @@ class SearchAgent:
 
         return []
 
+    def astar_search(self, start_pos, goal_pos, walls, grid_size, heuristic_type='manhattan'):
+        import itertools
+        counter = itertools.count()
+        frontier = []
+        reached_states = set()
+        
+        if heuristic_type == 'manhattan':
+            h = self.manhattan_distance(start_pos, goal_pos)
+        else:
+            h = self.euclidean_distance(start_pos, goal_pos)
+            
+        heapq.heappush(frontier, (0 + h, next(counter), 0, start_pos, []))
+        
+        while frontier:
+            f_cost, _, g_cost, current_pos, path_taken = heapq.heappop(frontier)
+            
+            if current_pos == goal_pos:
+                return path_taken
+                
+            if current_pos not in reached_states:
+                reached_states.add(current_pos)
+                
+                for action, neighbor in self._get_neighbors(current_pos, grid_size, walls):
+                    if neighbor not in reached_states:
+                        g_new = g_cost + 1
+                        if heuristic_type == 'manhattan':
+                            h_new = self.manhattan_distance(neighbor, goal_pos)
+                        else:
+                            h_new = self.euclidean_distance(neighbor, goal_pos)
+                        f_new = g_new + h_new
+                        heapq.heappush(frontier, (f_new, next(counter), g_new, neighbor, path_taken + [action]))
+                        
+        return []
+
     def plan_path(self, start: tuple, goals: set, grid_size: tuple, walls: set) -> list:
         """Plans a path to the goal food using the configured search strategy."""
         algo = self.active_algo.upper()
@@ -154,6 +195,8 @@ class SearchAgent:
             return self.dfs_search(start, goals, grid_size, walls)
         elif algo == 'UCS':
             return self.ucs_search(start, goals, grid_size, walls)
+        elif algo == 'ASTAR':
+            return self.astar_search(start, list(goals)[0], walls, grid_size)
         else:
             raise ValueError(f"Unknown search strategy: {self.active_algo}")
 
@@ -182,4 +225,4 @@ class SearchAgent:
         # Return the first action from the plan
         if self.plan:
             return self.plan.pop(0)
-        return random.choice(['Up', 'Down', 'Left', 'Right'])
+        return random.choice(['Up', 'Down', 'Left', 'Right'])
