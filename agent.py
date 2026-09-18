@@ -3,23 +3,19 @@ import random
 import math
 from collections import deque
 import heapq
+from logic_engine import KnowledgeBase
+
 
 class GreedyGridAgent:
-    """A simple agent that tries to move around systematically to clear the grid."""
-
     def __init__(self):
         self.actions_pool = ['Up', 'Down', 'Left', 'Right']
 
     def sense_and_act(self, percept: dict) -> str:
-        # If standing directly on food, or just wander / move towards coordinates
         pos = percept.get('agent_pos', [0, 0])
-        # Simple heuristic or fallback random sweep
         return random.choice(self.actions_pool)
 
 
 class SimpleReflexAgent:
-    """A simple reflex agent that reacts only to the current percept."""
-
     def sense_and_act(self, percept: dict) -> str:
         if percept.get('food_here', False):
             return 'MoveForward'
@@ -29,8 +25,6 @@ class SimpleReflexAgent:
 
 
 class ModelBasedAgent:
-    """A model-based agent that remembers prior percepts and avoids repeating the same failed action."""
-
     def __init__(self):
         self.last_percept = None
         self.last_action = None
@@ -39,7 +33,6 @@ class ModelBasedAgent:
         if percept.get('food_here', False):
             action = 'MoveForward'
         elif percept.get('wall_ahead', False):
-            # If we hit a wall and our last percept was also a wall, turning left didn't help, so turn right.
             if self.last_percept is not None and frozenset(self.last_percept.items()) == frozenset(percept.items()):
                 action = 'TurnRight'
             else:
@@ -53,11 +46,14 @@ class ModelBasedAgent:
 
 
 class SearchAgent:
-    """An agent that uses search algorithms (BFS, DFS, UCS) to navigate the grid environment."""
-
     def __init__(self, active_algo: str = 'BFS'):
-        self.plan = []  # List of actions to execute
-        self.active_algo = active_algo  # 'BFS', 'DFS', or 'UCS'
+        self.plan = []
+        self.active_algo = active_algo
+        
+        # Step 3.1: Defining the Game Constraints
+        self.kb = KnowledgeBase()
+        self.kb.tell_rule(['TargetVisible', 'HasDust'], 'SafeToEngage')
+        self.kb.tell_rule(['SafeToEngage', 'BloodseekerMissing'], 'Retreat')
 
     def manhattan_distance(self, pos, goal):
         return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
@@ -66,7 +62,6 @@ class SearchAgent:
         return math.sqrt((pos[0] - goal[0])**2 + (pos[1] - goal[1])**2)
 
     def _get_neighbors(self, state: tuple, grid_size: tuple, walls: set):
-        """Generates valid next states and the corresponding action."""
         x, y = state
         width, height = grid_size
         moves = [
@@ -82,11 +77,10 @@ class SearchAgent:
         return neighbors
 
     def bfs_search(self, start: tuple, goals: set, grid_size: tuple, walls: set) -> list:
-        """Breadth-First Search using a FIFO queue (deque.popleft())."""
         if start in goals:
             return []
 
-        frontier = deque([(start, [])])  # (state, path_of_actions)
+        frontier = deque([(start, [])])
         reached = {start}
 
         while frontier:
@@ -103,11 +97,10 @@ class SearchAgent:
         return []
 
     def dfs_search(self, start: tuple, goals: set, grid_size: tuple, walls: set) -> list:
-        """Depth-First Search using a LIFO stack (list.pop())."""
         if start in goals:
             return []
 
-        frontier = [(start, [])]  # (state, path_of_actions)
+        frontier = [(start, [])]
         reached = {start}
 
         while frontier:
@@ -124,11 +117,9 @@ class SearchAgent:
         return []
 
     def ucs_search(self, start: tuple, goals: set, grid_size: tuple, walls: set, step_cost: int = 1) -> list:
-        """Uniform-Cost Search using a Priority Queue (heapq.heappop()) ordered by path cost g(n)."""
         if start in goals:
             return []
 
-        # (cost, counter, state, path_of_actions)
         counter = 0
         frontier = [(0, counter, start, [])]
         reached = {start: 0}
@@ -139,7 +130,6 @@ class SearchAgent:
             if state in goals:
                 return path
 
-            # If we found a higher cost path than already reached, skip
             if cost > reached.get(state, float('inf')):
                 continue
 
@@ -152,7 +142,7 @@ class SearchAgent:
 
         return []
 
-    def astar_search(self, start_pos, goal_pos, walls, grid_size, heuristic_type='manhattan'):
+    def astar_search(self, start_pos, goal_pos, walls, grid_size, heuristic_type='manhattan', tile_percepts=None):
         import itertools
         counter = itertools.count()
         frontier = []
@@ -176,6 +166,18 @@ class SearchAgent:
                 
                 for action, neighbor in self._get_neighbors(current_pos, grid_size, walls):
                     if neighbor not in reached_states:
+                        # Step 3.2: Consult Knowledge Base before adding neighbor to open list
+                        self.kb.clear_facts()
+                        if tile_percepts and neighbor in tile_percepts:
+                            for fact in tile_percepts[neighbor]:
+                                self.kb.tell_fact(fact)
+                        
+                        self.kb.forward_chain()
+                        
+                        # If 'Retreat' is deduced, mark tile as Infeasible and skip it
+                        if 'Retreat' in self.kb.facts:
+                            continue
+
                         g_new = g_cost + 1
                         if heuristic_type == 'manhattan':
                             h_new = self.manhattan_distance(neighbor, goal_pos)
@@ -186,8 +188,7 @@ class SearchAgent:
                         
         return []
 
-    def plan_path(self, start: tuple, goals: set, grid_size: tuple, walls: set) -> list:
-        """Plans a path to the goal food using the configured search strategy."""
+    def plan_path(self, start: tuple, goals: set, grid_size: tuple, walls: set, tile_percepts: dict = None) -> list:
         algo = self.active_algo.upper()
         if algo == 'BFS':
             return self.bfs_search(start, goals, grid_size, walls)
@@ -196,33 +197,29 @@ class SearchAgent:
         elif algo == 'UCS':
             return self.ucs_search(start, goals, grid_size, walls)
         elif algo == 'ASTAR':
-            return self.astar_search(start, list(goals)[0], walls, grid_size)
+            return self.astar_search(start, list(goals)[0], walls, grid_size, tile_percepts=tile_percepts)
         else:
-            raise ValueError(f"Unknown search strategy: {self.active_algo}")
+            raise ValueError(f'Unknown search strategy: {self.active_algo}')
 
     def sense_and_act(self, percept: dict) -> str:
-        # Check if plan is empty
         if not self.plan:
-            # Extract environment details from percept
             agent_pos = tuple(percept.get('agent_pos', (0, 0)))
             all_food = percept.get('all_food', [])
             grid_size = tuple(percept.get('grid_size', (10, 10)))
             walls = set(tuple(w) for w in percept.get('walls', []))
+            tile_percepts = percept.get('tile_percepts', None)
 
             if not all_food:
                 return 'Stay'
 
-            # Find the closest food pellet using Manhattan distance
             closest_food = min(
                 all_food,
                 key=lambda f: abs(agent_pos[0] - f[0]) + abs(agent_pos[1] - f[1])
             )
             goal_set = {tuple(closest_food)}
 
-            # Execute search method matching active_algo and store in self.plan
-            self.plan = self.plan_path(agent_pos, goal_set, grid_size, walls)
+            self.plan = self.plan_path(agent_pos, goal_set, grid_size, walls, tile_percepts=tile_percepts)
 
-        # Return the first action from the plan
         if self.plan:
             return self.plan.pop(0)
         return random.choice(['Up', 'Down', 'Left', 'Right'])
